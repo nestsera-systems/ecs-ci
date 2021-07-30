@@ -1,0 +1,79 @@
+name: Remote Dispatch Action Responder
+ 
+on: [repository_dispatch]
+
+jobs:
+  identify:
+    name: Set environment variables
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Patching to github environment
+        run: |
+          echo -e "${{ github.event.client_payload.repository_configs }}" >> $GITHUB_ENV
+          echo -e "${{ github.event.client_payload.aws_configs }}" >> $GITHUB_ENV
+      -
+        name: Set the output variables
+        id: identify
+        run: |
+          echo "::set-output name=client_github_repository::$CLIENT_GITHUB_REPOSITORY"
+          echo "::set-output name=client_github_ref::$CLIENT_GITHUB_REF"
+          echo "::set-output name=client_ping_pat::$CLIENT_PING_PAT"
+          echo "::set-output name=repository_name::$REPOSITORY_NAME"
+          echo "::set-output name=branch_name::$BRANCH_NAME"
+          echo "::set-output name=ci_room_notify::$CI_ROOM_NOTIFY"
+          echo "::set-output name=aws_access_key_id::$AWS_ACCESS_KEY_ID"
+          echo "::set-output name=aws_account_id::$AWS_ACCOUNT_ID"
+          echo "::set-output name=aws_default_region::$AWS_DEFAULT_REGION"
+          echo "::set-output name=aws_secret_access_key::$AWS_SECRET_ACCESS_KEY"
+          echo "::set-output name=aws_ecs_cluster::$CI_AWS_ECS_CLUSTER"
+          echo "::set-output name=aws_ecs_service::$CI_AWS_ECS_SERVICE"
+          echo "::set-output name=aws_ecs_task_definition::$CI_AWS_ECS_TASK_DEFINITION"
+    outputs:
+      client_github_repository: ${{ steps.identify.outputs.client_github_repository }}
+      client_github_ref: ${{ steps.identify.outputs.client_github_ref }}
+      client_ping_pat: ${{ steps.identify.outputs.client_ping_pat }}
+      repository_name: ${{ steps.identify.outputs.repository_name }}
+      branch_name: ${{ steps.identify.outputs.branch_name }}
+      ci_room_notify: ${{ steps.identify.outputs.ci_room_notify }}
+      aws_access_key_id: ${{ steps.identify.outputs.aws_access_key_id }}
+      aws_account_id: ${{ steps.identify.outputs.aws_account_id }}
+      aws_default_region: ${{ steps.identify.outputs.aws_default_region }}
+      aws_secret_access_key: ${{ steps.identify.outputs.aws_secret_access_key }}
+      aws_ecs_cluster: ${{ steps.identify.outputs.aws_ecs_cluster }}
+      aws_ecs_service: ${{ steps.identify.outputs.aws_ecs_service }}
+      aws_ecs_task_definition: ${{ steps.identify.outputs.aws_ecs_task_definition }}
+
+  build:
+    name: Build and push image to Amazon ECR
+    needs: [identify]
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+        with:
+          repository: ${{ needs.identify.outputs.client_github_repository }}
+          ref: ${{ needs.identify.outputs.client_github_ref }}
+          token: ${{ secrets[needs.identify.outputs.client_ping_pat] }}
+      -
+        name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ needs.identify.outputs.aws_access_key_id }}
+          aws-secret-access-key: ${{ needs.identify.outputs.aws_secret_access_key }}
+          aws-region: ${{ needs.identify.outputs.aws_default_region }}
+      -
+        name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      -
+        name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+          ECR_REPOSITORY: ${{ needs.identify.outputs.repository_name }}
+          IMAGE_TAG: ${{ github.sha }}
+          ENV_FILE: ${{ github.event.client_payload.env_file }}
+        run: |
+          docker build --build-arg ENV_FILE="$ENV_FILE" -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG --pull . --force-rm
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
